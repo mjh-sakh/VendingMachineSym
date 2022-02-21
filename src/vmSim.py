@@ -1,5 +1,6 @@
-from typing import Union, List
+from typing import Union, List, Optional
 import numpy as np
+import pandas as pd
 import math
 import random
 import copy
@@ -51,9 +52,12 @@ class VendingMachine:
     def available_products(self) -> List[str]:
         return [name for name, ammount in self.columns.items() if ammount > 0]
     
-    def dispense_product(self, product_name):
+    def dispense_product(self, product_name: Optional[Union[bool, str]]):
         if product_name is None:
             self.write_history(self.empty_tag)
+            return
+        if product_name is False:
+            self.write_history(self.sold_out_tag)
             return
         self.columns[product_name] -= 1
         self.write_history(product_name)
@@ -87,7 +91,7 @@ class VendingMachine:
     def today_sales(self):
         sales = defaultdict(lambda: 0)
         for item in self.history[self.today]:
-            sales[item] += 1
+            if item not in [self.sold_out_tag, self.empty_tag]: sales[item] +=1
         return sales
     
     @property
@@ -119,19 +123,54 @@ class Customer:
     Customer
     
     """
-    def __init__(self, products):
+    def __init__(self, products: dict):
         preferences = dict()
         for name, (CI_min, CI_max) in products.items():
             preferences[name] = (np.random.lognormal(*conf_interval_to_lognormal_distribution(CI_min, CI_max)))
         self.preferences = preferences
+        self.preferences = self.get_normalized_preferences()
+        self.willingness_to_retry = np.random.uniform(0.05, 0.25)  # some magic numbers for now
         
+    def get_normalized_preferences(self, names=None):
+        if names is None: names = self.preferences.keys()
+        selected_values = [self.preferences[name] for name in names]
+        _sum = sum(selected_values)
+        return dict(zip(names, [value/_sum for value in selected_values]))
+    
     def __getitem__(self, *names) -> List[float]:
         """
         return preferences for each name of product in the order it's provided
         """
         return [self.preferences[name] for name in names]
     
-    def pick(self, choices: List[str]) -> str:
+    def pick(self, choices: List[str]) -> Union[bool, str]:
+        """
+        take list of available products, do pick for all preferences and check if available
+        if not available, do another try with some probability
+        if not available again, then return False
+        """
+        current_choice = self.choose_one()
+        if current_choice in choices:
+            return current_choice
+        if random.random() >= self.willingness_to_retry:
+            names = [name for name in self.preferences.keys() if name != current_choice]
+            current_choice = self.choose_one(names)
+            if current_choice in choices:
+                return current_choice
+        return False
+        
+    def choose_one(self, names=None):
+        if names is None: 
+            names = self.preferences.keys()
+            choices = self.preferences
+        else:
+            choices = self.get_normalized_preferences(names)
+        probabilities = list(choices.values())
+        choices_names = list(choices.keys())
+        return np.random.choice(choices_names, p=probabilities)
+        
+    
+    def pick_old(self, choices: List[str]) -> str:
         """
         takes list of available products to be picked from and returns one
         """
@@ -159,7 +198,7 @@ class BaseStrategy:
         
         raise NotImplemented
 
-        decision: Union(bool, dict) = False
+        decision: Union[bool, dict] = False
         self.write_decision(decision)
         return decision
 
@@ -180,3 +219,77 @@ class BaseStrategy:
         reads previous decision from VM history
         """
         self.vm.history[f"decision_{self.vm.today}"] = decision
+        
+    
+class Simulation:
+    def __init__(self, name: str, *, 
+                 products: dict, 
+                 product_costs: dict, 
+                 product_margins: dict, 
+                 VMs, 
+                 STGs, 
+                 cycles: int,
+                 local_time
+    ):
+        self.name = name
+        self.local_time = local_time
+        self.products = products
+        self.product_costs = product_costs
+        self.product_margins = product_margins
+        self.VMs = VMs
+        self.STGs = STGs
+        self.cycles = cycles
+        
+    def run(self):
+        self.total_inventory_levels = pd.DataFrame(columns=(['day'] + list(self.products.keys())))
+        self.total_sales = pd.DataFrame(columns=(['day'] + list(self.products.keys())))
+        self.refills_per_day = []
+        self.sold_outs_per_day = []
+
+        for day in range(self.cycles):
+            self.local_time.click()
+            today_inventory_levels = defaultdict(lambda: 0)
+            today_sales = defaultdict(lambda: 0)
+            refills_count = 0
+            sold_outs_count = 0
+
+            for vm in self.VMs:
+                self.complete_day_cycle(vm, self.products)
+                today_inventory_levels['day'] = today_sales['day'] = self.local_time.today
+                for name, ammount in vm.inventory.items():
+                    today_inventory_levels[name] += ammount
+                refil_stategy = self.STGs[vm]
+                refill_data = refil_stategy.make_refil_decision(vm)
+                if refill_data:
+                    vm.refill(refill_data)
+                    refills_count += 1
+                for name, ammount in vm.today_sales.items():
+                    today_sales[name] += ammount
+                sold_outs_count += vm.today_sold_outs
+
+            self.total_inventory_levels = self.total_inventory_levels.append(
+                today_inventory_levels,
+                ignore_index=True)
+            self.total_sales = self.total_sales.append(today_sales, ignore_index=True)  
+            self.refills_per_day.append(refills_count)
+            self.sold_outs_per_day.append(sold_outs_count)
+        
+        self.total_inventory_levels.set_index('day', inplace=True)
+        self.total_inventory_levels.fillna(0, inplace=True)
+        self.total_sales.set_index('day', inplace=True)
+        self.total_sales.fillna(0, inplace=True)
+        self.calc_stats()
+            
+    def calc_stats(self):
+        self.total_inventory_cost = np.dot(self.total_inventory_levels[self.products.keys()].values,
+            np.array([self.product_costs[product] for product in self.products.keys()]).reshape(-1, 1))
+            # this to make sure columns aligned, not just .values
+        self.profit = np.dot(self.total_sales[self.products.keys()].fillna(0).values,
+            np.array([self.product_margins[product] for product in self.products.keys()]).reshape(-1, 1))
+            # this to make sure columns aligned, not just .values
+
+    def complete_day_cycle(self, vm, products):
+        for i in range(vm.location.visits_today):
+            c = Customer(products)
+            picked_product = c.pick(vm.available_products)
+            vm.dispense_product(picked_product)

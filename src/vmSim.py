@@ -4,6 +4,8 @@ import pandas as pd
 import math
 import random
 import copy
+import seaborn as sns
+from matplotlib import pyplot as plt
 from collections import defaultdict
 
 
@@ -293,3 +295,10 @@ class Simulation:
             c = Customer(products)
             picked_product = c.pick(vm.available_products)
             vm.dispense_product(picked_product)
+            
+    def plot_stat(self, stat_name):
+        plt.figure(figsize=(12, 5))
+        plt.grid()
+        sns.lineplot(data=self.__dict__[stat_name])
+        plt.title(f'{stat_name.replace("_", " ").capitalize()} for "{self.name}" simulation')
+        plt.show()

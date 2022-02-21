@@ -1,4 +1,5 @@
-from typing import Union, List, Optional
+from __future__ import annotations
+from typing import Tuple, Union, List, Optional
 import numpy as np
 import pandas as pd
 import math
@@ -9,7 +10,12 @@ from matplotlib import pyplot as plt
 from collections import defaultdict
 
 
-def conf_interval_to_normal_distribution(minimum:float, maximum:float, z=1.645):
+# -- type aliases -- 
+Products = dict[str, Tuple[int, int]]
+Decision = Union[bool, dict[str, int]]
+
+
+def conf_interval_to_normal_distribution(minimum:float, maximum:float, z: float=1.645) -> Tuple[float, float]:
     """
     Conversts 90% confidence interval to mean and sigma for normal distribution
     z = 1.645  #for 90%
@@ -41,11 +47,15 @@ class VendingMachine:
     
     columns - dict[product] amount
     """
-    def __init__(self, *, name, columns, location, time):
+    def __init__(self, *,
+                name: str,
+                columns: dict[str, int], 
+                location: Location, 
+                time: SimulationTime):
         self.name = name
         self.columns = copy.deepcopy(columns)
         self.location = location
-        self.history = defaultdict(lambda: [])
+        self.history: defaultdict[int, List[str]] = defaultdict(lambda: [])
         self.time = time
         self.sold_out_tag = 'Sold out'
         self.empty_tag = 'Empty'
@@ -74,10 +84,10 @@ class VendingMachine:
         #     inventory[name] += count
         # return inventory
     
-    def write_history(self, product_name):
+    def write_history(self, product_name: str) -> None:
         self.history[self.time.today].append(product_name)
         
-    def refill(self, refill_data) -> dict:
+    def refill(self, refill_data: Decision) -> None:
         """
         recieves deltas for each product
         """
@@ -90,8 +100,8 @@ class VendingMachine:
         return self.time.today
     
     @property
-    def today_sales(self):
-        sales = defaultdict(lambda: 0)
+    def today_sales(self) -> defaultdict[str, int]:
+        sales: defaultdict[str, int] = defaultdict(lambda: 0)
         for item in self.history[self.today]:
             if item not in [self.sold_out_tag, self.empty_tag]: sales[item] +=1
         return sales
@@ -111,7 +121,7 @@ class Location:
     """
     Location
     """
-    def __init__(self, name: str, traffic_CI: tuple):
+    def __init__(self, name: str, traffic_CI: Tuple[int, int]):
         self.name = name
         self.traffic_CI = traffic_CI
     
@@ -125,21 +135,21 @@ class Customer:
     Customer
     
     """
-    def __init__(self, products: dict):
-        preferences = dict()
+    def __init__(self, products: Products):
+        preferences: dict[str, float] = dict()
         for name, (CI_min, CI_max) in products.items():
             preferences[name] = (np.random.lognormal(*conf_interval_to_lognormal_distribution(CI_min, CI_max)))
         self.preferences = preferences
         self.preferences = self.get_normalized_preferences()
         self.willingness_to_retry = np.random.uniform(0.05, 0.25)  # some magic numbers for now
         
-    def get_normalized_preferences(self, names=None):
-        if names is None: names = self.preferences.keys()
+    def get_normalized_preferences(self, names: Optional[List[str]]=None) -> dict[str, float]:
+        if names is None: names = list(self.preferences.keys())
         selected_values = [self.preferences[name] for name in names]
         _sum = sum(selected_values)
         return dict(zip(names, [value/_sum for value in selected_values]))
     
-    def __getitem__(self, *names) -> List[float]:
+    def __getitem__(self, *names: str) -> List[float]:
         """
         return preferences for each name of product in the order it's provided
         """
@@ -161,9 +171,8 @@ class Customer:
                 return current_choice
         return False
         
-    def choose_one(self, names=None):
+    def choose_one(self, names: Optional[List[str]]=None) -> str:
         if names is None: 
-            names = self.preferences.keys()
             choices = self.preferences
         else:
             choices = self.get_normalized_preferences(names)
@@ -187,10 +196,10 @@ class Customer:
     
     
 class BaseStrategy:
-    def __init__(self, name):
+    def __init__(self, name: str):
         self.name = name
         
-    def make_refil_decision(self, vending_machine: VendingMachine) -> Union[bool, dict]:
+    def make_refil_decision(self, vending_machine: VendingMachine) -> Decision:
         """
         takes state of provided vending machine and makes decision to refill or not
         if refill, returns product-ammount dict
@@ -200,23 +209,22 @@ class BaseStrategy:
         
         raise NotImplemented
 
-        decision: Union[bool, dict] = False
+        decision: Decision = False
         self.write_decision(decision)
         return decision
 
     
     @property
-    def last_decision(self):
+    def last_decision(self) -> Decision:
         return read_days_decision(self.vm, self.vm.today - 1)
     
-    @classmethod
-    def read_days_decision(vending_machine: VendingMachine, day: int) -> Union[bool, dict]:
+    def read_days_decision(self, day: int) -> Decision:
         """
         reads previous decision from VM history
         """
-        return vending_machine.get(f"decision_{day}")
+        return self.vm.history.get(f"decision_{day}")
         
-    def write_decision(self, decision: Union[bool, dict]) -> None:
+    def write_decision(self, decision: Decision) -> None:
         """
         reads previous decision from VM history
         """
@@ -225,13 +233,13 @@ class BaseStrategy:
     
 class Simulation:
     def __init__(self, name: str, *, 
-                 products: dict, 
-                 product_costs: dict, 
-                 product_margins: dict, 
-                 VMs, 
-                 STGs, 
+                 products: Products, 
+                 product_costs: dict[str, float], 
+                 product_margins: dict[str, float], 
+                 VMs: List[VendingMachine], 
+                 STGs: dict[VendingMachine, BaseStrategy], 
                  cycles: int,
-                 local_time
+                 local_time: SimulationTime
     ):
         self.name = name
         self.local_time = local_time
@@ -245,13 +253,13 @@ class Simulation:
     def run(self):
         self.total_inventory_levels = pd.DataFrame(columns=(['day'] + list(self.products.keys())))
         self.total_sales = pd.DataFrame(columns=(['day'] + list(self.products.keys())))
-        self.refills_per_day = []
-        self.sold_outs_per_day = []
+        self.refills_per_day: List[int] = []
+        self.sold_outs_per_day: List[int] = []
 
         for day in range(self.cycles):
             self.local_time.click()
-            today_inventory_levels = defaultdict(lambda: 0)
-            today_sales = defaultdict(lambda: 0)
+            today_inventory_levels: defaultdict[str, int] = defaultdict(lambda: 0)
+            today_sales: defaultdict[str, int] = defaultdict(lambda: 0)
             refills_count = 0
             sold_outs_count = 0
 
@@ -290,13 +298,13 @@ class Simulation:
             np.array([self.product_margins[product] for product in self.products.keys()]).reshape(-1, 1))
             # this to make sure columns aligned, not just .values
 
-    def complete_day_cycle(self, vm, products):
+    def complete_day_cycle(self, vm: VendingMachine, products: Products) -> None:
         for i in range(vm.location.visits_today):
             c = Customer(products)
             picked_product = c.pick(vm.available_products)
             vm.dispense_product(picked_product)
             
-    def plot_stat(self, stat_name):
+    def plot_stat(self, stat_name: str):
         plt.figure(figsize=(12, 5))
         plt.grid()
         sns.lineplot(data=self.__dict__[stat_name])

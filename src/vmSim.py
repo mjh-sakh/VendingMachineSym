@@ -1,17 +1,19 @@
 from __future__ import annotations
-from typing import Tuple, Union, List, Optional
+from typing import Any, Tuple, Union, List, Optional
 import numpy as np
 import pandas as pd
 import math
 import random
 import copy
+from pyparsing import col
 import seaborn as sns
 from matplotlib import pyplot as plt
 from collections import defaultdict
 
 
 # -- type aliases --
-Products = dict[str, Tuple[int, int]]
+Products = pd.DataFrame
+# columns = ['name', 'CI', 'size', 'cost', 'margin']
 Decision = Union[bool, dict[str, int]]
 
 
@@ -41,20 +43,56 @@ class SimulationTime:
         self.today = 0
 
 
+class Product:
+    """
+    Product
+
+    Not in use
+    """
+
+    def __init__(self, *,
+                 name: str,
+                 CI: Tuple[int, int],
+                 size: int,
+                 cost: int,
+                 margin: int) -> None:
+        self.name = name
+        self.CI = CI
+        self.size = size
+        self.cost = cost
+        self.margin = margin
+        self.df: pd.DataFrame
+
+    def as_df(self) -> pd.DataFrame:
+        if self.df is None:
+            self.df = pd.DataFrame({
+                'name': self.name,
+                'CI': self.CI,
+                'size': self.size,
+                'cost': self.cost,
+                'margin': self.margin,
+            })
+        return self.df
+
+
 class VendingMachine:
     """
     VendingMachine
 
     columns - dict[product] amount
     """
+    Capacity = int
+    ProductName = Optional[str]
+    Column = Tuple[ProductName, Capacity]
 
     def __init__(self, *,
                  name: str,
-                 columns: dict[str, int],
+                 columns: List[Column],
                  location: Location,
                  time: SimulationTime):
         self.name = name
         self.columns = copy.deepcopy(columns)
+        self.holdings = [0] * len(columns)
         self.location = location
         self.history: defaultdict[int, List[str]] = defaultdict(lambda: [])
         self.time = time
@@ -62,8 +100,8 @@ class VendingMachine:
         self.empty_tag = 'Empty'
 
     @property
-    def available_products(self) -> List[str]:
-        return [name for name, ammount in self.columns.items() if ammount > 0]
+    def available_products(self) -> List[ProductName]:
+        return [name for name, ammount in self.inventory.items() if ammount > 0]
 
     def dispense_product(self, product_name: Optional[Union[bool, str]]):
         if product_name is None:
@@ -72,30 +110,44 @@ class VendingMachine:
         if product_name is False:
             self.write_history(self.sold_out_tag)
             return
-        self.columns[product_name] -= 1
+        self.inventory = (product_name, self.inventory[product_name] - 1)
         self.write_history(product_name)
-        if self.columns[product_name] == 0:
+        if self.inventory[product_name] == 0:
             self.write_history(self.sold_out_tag)
 
     @property
-    def inventory(self):
-        return self.columns
-        # inventory = defaultdict(lambda: 0)
-        # for name, count in self.columns:
-        #     inventory[name] += count
-        # return inventory
+    def capacity(self) -> defaultdict[ProductName, int]:
+        capacity = defaultdict(lambda: 0)
+        for name, column_capacity in self.columns:
+            capacity[name] += column_capacity
+        return capacity
+
+    @property
+    def inventory(self) -> defaultdict[ProductName, int]:
+        inventory = defaultdict(lambda: 0)
+        for i, (name, _) in enumerate(self.columns):
+            inventory[name] += self.holdings[i]
+        return inventory
+
+    @inventory.setter
+    def inventory(self, name_value: Tuple[ProductName, int]):
+        name, value = name_value
+        for column_ix, (prod_name, capacity) in enumerate(
+                self.columns):
+            if name == prod_name:
+                self.holdings[column_ix] = min(capacity, value)
+                value = max(0, value - capacity)
 
     def write_history(self, product_name: str) -> None:
         self.history[self.time.today].append(product_name)
 
     def refill(self, refill_data: Decision) -> None:
         """
-        recieves deltas for each product
+        recieve deltas for each product
+        it will ignore overfill
         """
         for name, ammount in refill_data.items():
-            self.columns[name] += ammount
-            if self.columns[name] < 0:
-                raise
+            self.inventory = (name, ammount)
 
     @property
     def today(self):
@@ -242,8 +294,6 @@ class BaseStrategy:
 class Simulation:
     def __init__(self, name: str, *,
                  products: Products,
-                 product_costs: dict[str, float],
-                 product_margins: dict[str, float],
                  VMs: List[VendingMachine],
                  STGs: dict[VendingMachine, BaseStrategy],
                  cycles: int,
@@ -251,12 +301,16 @@ class Simulation:
                  ):
         self.name = name
         self.local_time = local_time
-        self.products = products
-        self.product_costs = product_costs
-        self.product_margins = product_margins
+        self.products = self.from_df_to_dict(products, ['name', 'CI'])
+        self.product_costs = self.from_df_to_dict(products, ['name', 'cost'])
+        self.product_margins = self.from_df_to_dict(
+            products, ['name', 'margin'])
         self.VMs = VMs
         self.STGs = STGs
         self.cycles = cycles
+
+    def from_df_to_dict(self, df: pd.DataFrame, columns: List[str]):
+        return dict(df[columns].to_dict('split')['data'])
 
     def run(self):
         self.total_inventory_levels = pd.DataFrame(
@@ -265,6 +319,13 @@ class Simulation:
             columns=(['day'] + list(self.products.keys())))
         self.refills_per_day: List[int] = []
         self.sold_outs_per_day: List[int] = []
+
+        # initial fill
+        for vm in self.VMs:
+            refil_stategy = self.STGs[vm]
+            refill_data = refil_stategy.make_refil_decision(vm)
+            if refill_data:
+                vm.refill(refill_data)
 
         for day in range(self.cycles):
             self.local_time.click()

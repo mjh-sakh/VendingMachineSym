@@ -1,34 +1,35 @@
 from __future__ import annotations
-from typing import Any, Tuple, Union, List, Optional
-import numpy as np
-import pandas as pd
+
+import copy
 import math
 import random
-import copy
-from pyparsing import col
+from collections import defaultdict
+from typing import Callable, Tuple, Union, List, Optional
+
+import numpy as np
+import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
-from collections import defaultdict
-
 
 # -- type aliases --
 Products = pd.DataFrame
+ProductsCI = dict[str, Tuple[float, float]]
 # columns = ['name', 'CI', 'size', 'cost', 'margin']
 Decision = Union[bool, dict[str, int]]
 
 
 def conf_interval_to_normal_distribution(minimum: float, maximum: float, z: float = 1.645) -> Tuple[float, float]:
     """
-    Conversts 90% confidence interval to mean and sigma for normal distribution
+    Convert 90% confidence interval to mean and sigma for normal distribution
     z = 1.645  #for 90%
     z = 1.96  #for 95%
     z = 2.576  #for 99%
     """
-    return minimum + (maximum - minimum)/2, (maximum - minimum) / (2*z)
+    return minimum + (maximum - minimum) / 2, (maximum - minimum) / (2 * z)
 
 
-def conf_interval_to_lognormal_distribution(minimum: float, maximum: float):
-    """Conversts 90% confidence interval to mean and sigma for log-normal distribution"""
+def conf_interval_to_lognormal_distribution(minimum: float, maximum: float) -> Tuple[float, float]:
+    """Convert 90% confidence interval to mean and sigma for log-normal distribution"""
     return conf_interval_to_normal_distribution(math.log(minimum), math.log(maximum))
 
 
@@ -52,16 +53,16 @@ class Product:
 
     def __init__(self, *,
                  name: str,
-                 CI: Tuple[int, int],
+                 conf_interval: Tuple[int, int],
                  size: int,
                  cost: int,
                  margin: int) -> None:
         self.name = name
-        self.CI = CI
+        self.CI = conf_interval
         self.size = size
         self.cost = cost
         self.margin = margin
-        self.df: pd.DataFrame
+        self.df: Union[None, pd.DataFrame] = None
 
     def as_df(self) -> pd.DataFrame:
         if self.df is None:
@@ -94,14 +95,14 @@ class VendingMachine:
         self.columns = copy.deepcopy(columns)
         self.holdings = [0] * len(columns)
         self.location = location
-        self.history: defaultdict[int, List[str]] = defaultdict(lambda: [])
+        self.history: dict[Union[int, str], Union[List[str], Decision]] = defaultdict(lambda: [])
         self.time = time
         self.sold_out_tag = 'Sold out'
         self.empty_tag = 'Empty'
 
     @property
     def available_products(self) -> List[ProductName]:
-        return [name for name, ammount in self.inventory.items() if ammount > 0]
+        return [name for name, amount in self.inventory.items() if amount > 0]
 
     def dispense_product(self, product_name: Optional[Union[bool, str]]):
         if product_name is None:
@@ -143,11 +144,11 @@ class VendingMachine:
 
     def refill(self, refill_data: Decision) -> None:
         """
-        recieve deltas for each product
+        receive deltas for each product
         it will ignore overfill
         """
-        for name, ammount in refill_data.items():
-            self.inventory = (name, ammount)
+        for name, amount in refill_data.items():
+            self.inventory = (name, amount)
 
     @property
     def today(self):
@@ -178,9 +179,9 @@ class Location:
     Location
     """
 
-    def __init__(self, name: str, traffic_CI: Tuple[int, int]):
+    def __init__(self, name: str, traffic_conf_interval: Tuple[int, int]):
         self.name = name
-        self.traffic_CI = traffic_CI
+        self.traffic_CI = traffic_conf_interval
 
     @property
     def visits_today(self) -> int:
@@ -193,11 +194,11 @@ class Customer:
 
     """
 
-    def __init__(self, products: Products):
+    def __init__(self, products: ProductsCI):
         preferences: dict[str, float] = dict()
         for name, (CI_min, CI_max) in products.items():
-            preferences[name] = (np.random.lognormal(
-                *conf_interval_to_lognormal_distribution(CI_min, CI_max)))
+            preferences[name] = np.random.lognormal(
+                *conf_interval_to_lognormal_distribution(CI_min, CI_max))
         self.preferences = preferences
         self.preferences = self.get_normalized_preferences()
         self.willingness_to_retry = np.random.uniform(
@@ -208,7 +209,7 @@ class Customer:
             names = list(self.preferences.keys())
         selected_values = [self.preferences[name] for name in names]
         _sum = sum(selected_values)
-        return dict(zip(names, [value/_sum for value in selected_values]))
+        return dict(zip(names, [value / _sum for value in selected_values]))
 
     def __getitem__(self, *names: str) -> List[float]:
         """
@@ -259,11 +260,12 @@ class Customer:
 class BaseStrategy:
     def __init__(self, name: str):
         self.name = name
+        self.vm: VendingMachine = None
 
-    def make_refil_decision(self, vending_machine: VendingMachine) -> Decision:
+    def make_refill_decision(self, vending_machine: VendingMachine) -> Decision:
         """
         takes state of provided vending machine and makes decision to refill or not
-        if refill, returns product-ammount dict
+        if refilled, returns product-amount dict
         if not, returns False
         """
         self.vm = vending_machine
@@ -276,7 +278,7 @@ class BaseStrategy:
 
     @property
     def last_decision(self) -> Decision:
-        return read_days_decision(self.vm, self.vm.today - 1)
+        return self.read_days_decision(self.vm.today - 1)
 
     def read_days_decision(self, day: int) -> Decision:
         """
@@ -301,7 +303,7 @@ class Simulation:
                  ):
         self.name = name
         self.local_time = local_time
-        self.products = self.from_df_to_dict(products, ['name', 'CI'])
+        self.products: ProductsCI = self.from_df_to_dict(products, ['name', 'CI'])
         self.product_costs = self.from_df_to_dict(products, ['name', 'cost'])
         self.product_margins = self.from_df_to_dict(
             products, ['name', 'margin'])
@@ -309,7 +311,16 @@ class Simulation:
         self.STGs = STGs
         self.cycles = cycles
 
-    def from_df_to_dict(self, df: pd.DataFrame, columns: List[str]):
+        # -- stats --
+        self.total_inventory_levels = pd.DataFrame()
+        self.total_sales = pd.DataFrame()
+        self.refills_per_day: List[int] = []
+        self.sold_outs_per_day: List[int] = []
+        self.total_inventory_cost = np.array([])
+        self.profit = np.array([])
+
+    @staticmethod
+    def from_df_to_dict(df: pd.DataFrame, columns: List[str]):
         return dict(df[columns].to_dict('split')['data'])
 
     def run(self):
@@ -317,13 +328,13 @@ class Simulation:
             columns=(['day'] + list(self.products.keys())))
         self.total_sales = pd.DataFrame(
             columns=(['day'] + list(self.products.keys())))
-        self.refills_per_day: List[int] = []
-        self.sold_outs_per_day: List[int] = []
+        self.refills_per_day = []
+        self.sold_outs_per_day = []
 
         # initial fill
         for vm in self.VMs:
-            refil_stategy = self.STGs[vm]
-            refill_data = refil_stategy.make_refil_decision(vm)
+            refill_strategy = self.STGs[vm]
+            refill_data = refill_strategy.make_refill_decision(vm)
             if refill_data:
                 vm.refill(refill_data)
 
@@ -336,17 +347,17 @@ class Simulation:
             sold_outs_count = 0
 
             for vm in self.VMs:
-                self.complete_day_cycle(vm, self.products)
+                self.complete_day_cycle(vm)
                 today_inventory_levels['day'] = today_sales['day'] = self.local_time.today
-                for name, ammount in vm.inventory.items():
-                    today_inventory_levels[name] += ammount
-                refil_stategy = self.STGs[vm]
-                refill_data = refil_stategy.make_refil_decision(vm)
+                for name, amount in vm.inventory.items():
+                    today_inventory_levels[name] += amount
+                refill_strategy = self.STGs[vm]
+                refill_data = refill_strategy.make_refill_decision(vm)
                 if refill_data:
                     vm.refill(refill_data)
                     refills_count += 1
-                for name, ammount in vm.today_sales.items():
-                    today_sales[name] += ammount
+                for name, amount in vm.today_sales.items():
+                    today_sales[name] += amount
                 sold_outs_count += vm.today_sold_outs
 
             self.total_inventory_levels = self.total_inventory_levels.append(
@@ -365,15 +376,17 @@ class Simulation:
 
     def calc_stats(self):
         self.total_inventory_cost = np.dot(self.total_inventory_levels[self.products.keys()].values,
-                                           np.array([self.product_costs[product] for product in self.products.keys()]).reshape(-1, 1))
+                                           np.array([self.product_costs[product] for product in
+                                                     self.products.keys()]).reshape(-1, 1))
         # this to make sure columns aligned, not just .values
         self.profit = np.dot(self.total_sales[self.products.keys()].fillna(0).values,
-                             np.array([self.product_margins[product] for product in self.products.keys()]).reshape(-1, 1))
+                             np.array([self.product_margins[product] for product in self.products.keys()]).reshape(-1,
+                                                                                                                   1))
         # this to make sure columns aligned, not just .values
 
-    def complete_day_cycle(self, vm: VendingMachine, products: Products) -> None:
+    def complete_day_cycle(self, vm: VendingMachine) -> None:
         for i in range(vm.location.visits_today):
-            c = Customer(products)
+            c = Customer(self.products)
             picked_product = c.pick(vm.available_products)
             vm.dispense_product(picked_product)
 
@@ -384,3 +397,25 @@ class Simulation:
         plt.title(
             f'{stat_name.replace("_", " ").capitalize()} for "{self.name}" simulation')
         plt.show()
+
+
+class GridSearch:
+
+    def __init__(self, *,
+                 sim: Simulation,
+                 param_ranges: dict,
+                 scoring_function: Callable[[Simulation], float]) -> None:
+        pass
+
+
+class SGD:
+    def __init__(self, *,
+                 sim: Simulation,
+                 param_ranges: dict,
+                 scoring_function: Callable[[Simulation], float]) -> None:
+        self.sim = sim
+        self.param_ranges = param_ranges
+        self.scoring_function = scoring_function
+
+    def calc_grad(self):
+        pass

@@ -4,7 +4,7 @@ import copy
 import math
 import random
 from collections import defaultdict
-from typing import Callable, Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -257,42 +257,6 @@ class Customer:
                 return choices[i]
 
 
-class BaseStrategy:
-    def __init__(self, name: str):
-        self.name = name
-        self.vm: VendingMachine = None
-
-    def make_refill_decision(self, vending_machine: VendingMachine) -> Decision:
-        """
-        takes state of provided vending machine and makes decision to refill or not
-        if refilled, returns product-amount dict
-        if not, returns False
-        """
-        self.vm = vending_machine
-
-        raise NotImplemented
-
-        decision: Decision = False
-        self.write_decision(decision)
-        return decision
-
-    @property
-    def last_decision(self) -> Decision:
-        return self.read_days_decision(self.vm.today - 1)
-
-    def read_days_decision(self, day: int) -> Decision:
-        """
-        reads previous decision from VM history
-        """
-        return self.vm.history.get(f"decision_{day}")
-
-    def write_decision(self, decision: Decision) -> None:
-        """
-        reads previous decision from VM history
-        """
-        self.vm.history[f"decision_{self.vm.today}"] = decision
-
-
 class Simulation:
     def __init__(self, name: str, *,
                  products: Products,
@@ -399,23 +363,37 @@ class Simulation:
         plt.show()
 
 
-class GridSearch:
+class BaseStrategy:
+    def __init__(self, name: str):
+        self.name = name
+        self.vm: VendingMachine = None
 
-    def __init__(self, *,
-                 sim: Simulation,
-                 param_ranges: dict,
-                 scoring_function: Callable[[Simulation], float]) -> None:
-        pass
+    def make_refill_decision(self, vending_machine: VendingMachine) -> Decision:
+        """
+        takes state of provided vending machine and makes decision to refill or not
+        if refilled, returns product-amount dict
+        if not, returns False
+        """
+        self.vm = vending_machine
 
+        raise NotImplemented
 
-class SGD:
-    def __init__(self, *,
-                 sim: Simulation,
-                 param_ranges: dict,
-                 scoring_function: Callable[[Simulation], float]) -> None:
-        self.sim = sim
-        self.param_ranges = param_ranges
-        self.scoring_function = scoring_function
+        decision: Decision = False
+        self.write_decision(decision)
+        return decision
 
-    def calc_grad(self):
-        pass
+    @property
+    def last_decision(self) -> Decision:
+        return self.read_days_decision(self.vm.today - 1)
+
+    def read_days_decision(self, day: int) -> Decision:
+        """
+        reads previous decision from VM history
+        """
+        return self.vm.history.get(f"decision_{day}")
+
+    def write_decision(self, decision: Decision) -> None:
+        """
+        reads previous decision from VM history
+        """
+        self.vm.history[f"decision_{self.vm.today}"] = decision

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "vendingmachinesym"
-version = "0.1.0"
+version = "0.2.0"
 description = "Vending Machine Description"
 authors = ["Andrey <andrey@mytenten.com>"]
 
@@ -12,6 +12,7 @@ ipympl = "^0.8.8"
 jupyter = "^1.0.0"
 matplotlib = "^3.5.1"
 seaborn = "^0.11.2"
+ubelt = "^1.0.1"
 
 [tool.poetry.dev-dependencies]
 

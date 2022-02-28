@@ -100,6 +100,9 @@ class VendingMachine:
         self.sold_out_tag = 'Sold out'
         self.empty_tag = 'Empty'
 
+    def __repr__(self):
+        return self.name
+
     @property
     def available_products(self) -> List[ProductName]:
         return [name for name, amount in self.inventory.items() if amount > 0]
@@ -234,14 +237,14 @@ class Customer:
                 return current_choice
         return False
 
-    def choose_one(self, names: Optional[List[str]] = None) -> str:
+    def choose_one(self, names: Optional[List[str]] = None) -> str:  # slow
         if names is None:
             choices = self.preferences
         else:
             choices = self.get_normalized_preferences(names)
         probabilities = list(choices.values())
         choices_names = list(choices.keys())
-        return np.random.choice(choices_names, p=probabilities)
+        return np.random.choice(choices_names, p=probabilities)  # slow likely because of that
 
     def pick_old(self, choices: List[str]) -> str:
         """
@@ -367,6 +370,9 @@ class BaseStrategy:
     def __init__(self, name: str):
         self.name = name
         self.vm: VendingMachine = None
+
+    def __repr__(self):
+        return self.name
 
     def make_refill_decision(self, vending_machine: VendingMachine) -> Decision:
         """

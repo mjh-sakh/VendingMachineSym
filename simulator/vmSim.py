@@ -18,6 +18,14 @@ ProductsCI = dict[str, Tuple[float, float]]
 Decision = Union[bool, dict[str, int]]
 
 
+def _lambda_zero():
+    return 0
+
+
+def _lambda_empty_list():
+    return []
+
+
 def conf_interval_to_normal_distribution(minimum: float, maximum: float, z: float = 1.645) -> Tuple[float, float]:
     """
     Convert 90% confidence interval to mean and sigma for normal distribution
@@ -95,7 +103,7 @@ class VendingMachine:
         self.columns = copy.deepcopy(columns)
         self.holdings = [0] * len(columns)
         self.location = location
-        self.history: dict[Union[int, str], Union[List[str], Decision]] = defaultdict(lambda: [])
+        self.history: dict[Union[int, str], Union[List[str], Decision]] = defaultdict(_lambda_empty_list)
         self.time = time
         self.sold_out_tag = 'Sold out'
         self.empty_tag = 'Empty'
@@ -121,14 +129,14 @@ class VendingMachine:
 
     @property
     def capacity(self) -> defaultdict[ProductName, int]:
-        capacity = defaultdict(lambda: 0)
+        capacity = defaultdict(_lambda_zero)
         for name, column_capacity in self.columns:
             capacity[name] += column_capacity
         return capacity
 
     @property
     def inventory(self) -> defaultdict[ProductName, int]:
-        inventory = defaultdict(lambda: 0)
+        inventory = defaultdict(_lambda_zero)
         for i, (name, _) in enumerate(self.columns):
             inventory[name] += self.holdings[i]
         return inventory
@@ -159,7 +167,7 @@ class VendingMachine:
 
     @property
     def today_sales(self) -> defaultdict[str, int]:
-        sales: defaultdict[str, int] = defaultdict(lambda: 0)
+        sales: defaultdict[str, int] = defaultdict(_lambda_zero )
         for item in self.history[self.today]:
             if item not in [self.sold_out_tag, self.empty_tag]:
                 sales[item] += 1
@@ -291,10 +299,8 @@ class Simulation:
         return dict(df[columns].to_dict('split')['data'])
 
     def run(self):
-        self.total_inventory_levels = pd.DataFrame(
-            columns=(['day'] + list(self.products.keys())))
-        self.total_sales = pd.DataFrame(
-            columns=(['day'] + list(self.products.keys())))
+        total_inventory_levels = []
+        total_sales = []
         self.refills_per_day = []
         self.sold_outs_per_day = []
 
@@ -307,9 +313,8 @@ class Simulation:
 
         for day in range(self.cycles):
             self.local_time.click()
-            today_inventory_levels: defaultdict[str, int] = defaultdict(
-                lambda: 0)
-            today_sales: defaultdict[str, int] = defaultdict(lambda: 0)
+            today_inventory_levels: defaultdict[str, int] = defaultdict(_lambda_zero)
+            today_sales: defaultdict[str, int] = defaultdict(_lambda_zero)
             refills_count = 0
             sold_outs_count = 0
 
@@ -327,16 +332,15 @@ class Simulation:
                     today_sales[name] += amount
                 sold_outs_count += vm.today_sold_outs
 
-            self.total_inventory_levels = self.total_inventory_levels.append(
-                today_inventory_levels,
-                ignore_index=True)
-            self.total_sales = self.total_sales.append(
-                today_sales, ignore_index=True)
+            total_inventory_levels.append(today_inventory_levels)
+            total_sales.append(today_sales)
             self.refills_per_day.append(refills_count)
             self.sold_outs_per_day.append(sold_outs_count)
 
+        self.total_inventory_levels = pd.DataFrame(total_inventory_levels)
         self.total_inventory_levels.set_index('day', inplace=True)
         self.total_inventory_levels.fillna(0, inplace=True)
+        self.total_sales = pd.DataFrame(total_sales)
         self.total_sales.set_index('day', inplace=True)
         self.total_sales.fillna(0, inplace=True)
         self.calc_stats()

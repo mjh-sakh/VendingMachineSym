@@ -1,21 +1,23 @@
 [tool.poetry]
+authors = ["Andrey <andrey@mytenten.com>"]
+description = "Vending Machine Description"
 name = "vendingmachinesym"
 version = "0.2.0"
-description = "Vending Machine Description"
-authors = ["Andrey <andrey@mytenten.com>"]
 
 [tool.poetry.dependencies]
-python = "^3.10"
-pandas = "^1.4.1"
-numpy = "^1.22"
 ipympl = "^0.8.8"
 jupyter = "^1.0.0"
 matplotlib = "^3.5.1"
+numpy = "^1.22"
+pandas = "^1.4.1"
+python = ">=3.8, <3.11"
 seaborn = "^0.11.2"
 ubelt = "^1.0.1"
+scipy = "^1.8.0"
 
 [tool.poetry.dev-dependencies]
+pytest = "^7.0.1"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=1.0.0"]

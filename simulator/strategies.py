@@ -1,4 +1,4 @@
-from vmSim import BaseStrategy, VendingMachine, Decision
+from simulator.vmSim import BaseStrategy, VendingMachine, Decision
 
 
 class FillUpAllExistingToMaxOnMinLevel(BaseStrategy):

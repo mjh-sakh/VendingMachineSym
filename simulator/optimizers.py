@@ -1,12 +1,23 @@
 from functools import reduce
 from itertools import product
 from typing import Any, Callable, List
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from ubelt import ProgIter
 
-from strategies import FillUpAllExistingToMaxOnMinLevel
-from vmSim import Simulation
+from simulator.strategies import FillUpAllExistingToMaxOnMinLevel
+from simulator.vmSim import Simulation
+
+
+class UtilityFunctions:
+    @staticmethod
+    def revenue(sim: Simulation, *, interest_rate: float, trip_cost: float) -> float:
+        expenses = sum(sim.refills_per_day) * trip_cost + np.mean(sim.total_inventory_cost) / 365 * len(
+            sim.total_inventory_cost) * interest_rate
+        profits = sum(sim.profit)[0]
+        revenue = profits - expenses
+        return revenue
 
 
 class GridSearch:
@@ -14,9 +25,15 @@ class GridSearch:
     def __init__(self, *,
                  sim: Simulation,
                  param_grid: dict[str, Any],
-                 scoring_function: Callable[[Simulation], float]) -> None:
+                 scoring_function: Callable[[Simulation], float],
+                 random_sampling: float = 1.0) -> None:
+        """
+        take Simulation, param grid and scoring function, calculate score for each point of the grid
+        optional random sampling is fraction of points to be scored, default is 1 (100%)
+        """
         self.sim = sim
         self.param_grid = param_grid
+        self.random_sampling = min(1.0, max(0.0, random_sampling))
         self.scoring_function = scoring_function
         self.param_names = sorted(param_grid.keys())
         self.scores: dict[str, float] = {}
@@ -60,22 +77,14 @@ class GridSearch:
             for i in range(shape[0]):
                 yield from self.iter_indexes(shape[1:], acc=acc + [i])
 
-    @staticmethod
-    def hash_(params: List[Any]) -> str:
-        return '-'.join(map(str, params))
-
     def score(self, params: List[Any]) -> float:
         """
         update simulation parameters and run scoring function on it
         """
-        # score = self.scores.get(self.hash_(params))
-        # if score:
-        #     return score
-
+        self.sim.local_time.reset()
         self.update_sim(params)
         self.sim.run()
         score = self.scoring_function(self.sim)
-        # self.scores[self.hash_(params)] = score
         return score
 
     def update_sim(self, params: list[Any]) -> None:
@@ -96,14 +105,26 @@ class GridSearch:
         go over entire grid of parameters and calculate score
         record score to scores_matrix with associated params_matrix
         """
-        prog = ProgIter(desc='Grid Search', total=reduce(lambda i, acc: acc * i, self.scores_matrix.shape, 1),
+        total_grid_points = reduce(lambda i, acc: acc * i, self.scores_matrix.shape, 1)
+        indexes = list(self.iter_indexes(self.shape))
+        sampled_grid_points = 0
+        if self.random_sampling < 1:
+            np.random.shuffle(indexes)
+            sampled_grid_points = int(total_grid_points * self.random_sampling)
+            assert sampled_grid_points > 0, 'Given random_sampling resulted in 0 points to be checked'
+            indexes = indexes[:sampled_grid_points]
+        prog = ProgIter(desc='Grid Search', total=(sampled_grid_points or total_grid_points),
                         verbose=1)
+
         prog.begin()
-        for ix in self.iter_indexes(self.shape):
-            score = self.score(self.params_matrix[ix])
-            self.scores_matrix[ix] = score
-            prog.step(inc=1)
+        with ProcessPoolExecutor() as executor:
+            for ix, score in zip(indexes, executor.map(self.score_for_ix, indexes)):
+                self.scores_matrix[ix] = score
+                prog.step(inc=1)
         prog.end()
+
+    def score_for_ix(self, ix):
+        return self.score(self.params_matrix[tuple(ix)])
 
 
 class SGD:

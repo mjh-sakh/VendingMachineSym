@@ -321,15 +321,15 @@ class Simulation:
             for vm in self.VMs:
                 self.complete_day_cycle(vm)
                 today_inventory_levels['day'] = today_sales['day'] = self.local_time.today
-                for name, amount in vm.inventory.items():
-                    today_inventory_levels[name] += amount
+                for name in self.products.keys():
+                    today_inventory_levels[name] += vm.inventory.get(name, 0)
                 refill_strategy = self.STGs[vm]
                 refill_data = refill_strategy.make_refill_decision(vm)
                 if refill_data:
                     vm.refill(refill_data)
                     refills_count += 1
-                for name, amount in vm.today_sales.items():
-                    today_sales[name] += amount
+                for name in self.products.keys():
+                    today_sales[name] += vm.today_sales.get(name, 0)
                 sold_outs_count += vm.today_sold_outs
 
             total_inventory_levels.append(today_inventory_levels)
@@ -346,14 +346,14 @@ class Simulation:
         self.calc_stats()
 
     def calc_stats(self):
+        # this to make sure columns aligned, not just .values
         self.total_inventory_cost = np.dot(self.total_inventory_levels[self.products.keys()].values,
-                                           np.array([self.product_costs[product] for product in
+                                           np.array([self.product_costs.get(product, 0) for product in
                                                      self.products.keys()]).reshape(-1, 1))
         # this to make sure columns aligned, not just .values
         self.profit = np.dot(self.total_sales[self.products.keys()].fillna(0).values,
-                             np.array([self.product_margins[product] for product in self.products.keys()]).reshape(-1,
+                             np.array([self.product_margins.get(product, 0) for product in self.products.keys()]).reshape(-1,
                                                                                                                    1))
-        # this to make sure columns aligned, not just .values
 
     def complete_day_cycle(self, vm: VendingMachine) -> None:
         for i in range(vm.location.visits_today):

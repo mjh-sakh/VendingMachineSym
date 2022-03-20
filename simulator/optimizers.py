@@ -26,14 +26,19 @@ class GridSearch:
                  sim: Simulation,
                  param_grid: dict[str, Any],
                  scoring_function: Callable[[Simulation], float],
-                 random_sampling: float = 1.0) -> None:
+                 random_sampling: Union[float, int] = 1.0) -> None:
         """
         take Simulation, param grid and scoring function, calculate score for each point of the grid
         optional random sampling is fraction of points to be scored, default is 1 (100%)
+        integer value can be provided instead of fraction to specify max number of sample points
         """
         self.sim = sim
         self.param_grid = param_grid
-        self.random_sampling = min(1.0, max(0.0, random_sampling))
+        if random_sampling > 1:
+            self.sample_size = int(random_sampling)
+        else:
+            self.random_sampling = min(1.0, max(0.0, random_sampling))
+            self.sample_size = None
         self.scoring_function = scoring_function
         self.param_names = sorted(param_grid.keys())
         self.scores: dict[str, float] = {}
@@ -87,38 +92,23 @@ class GridSearch:
         score = self.scoring_function(self.sim)
         return score
 
-    def update_sim(self, params: list[Any]) -> None:
-        """
-        update simulation parameters in order to run it again
-        currently it's tailored for one particular one with min_levels and how_many_should_hit_min params
-        """
-        updated_strategy: FillUpAllExistingToMaxOnMinLevel = self.sim.STGs[self.sim.VMs[0]]
-        params_dict = dict(zip(self.param_names, params))
-        for name in updated_strategy.min_levels.keys():
-            updated_strategy.min_levels[name] = params_dict.get(name) or updated_strategy.min_levels[name]
-        if (value := params_dict['how_many_should_hit_min']):
-            updated_strategy.how_many_should_hit_min = value
-        self.sim.STGs[self.sim.VMs[0]] = updated_strategy
+    def get_sample_points(self):
+        grid_size = reduce(lambda i, acc: acc * i, self.scores_matrix.shape, 1)
+        all_points = list(self.iter_indexes(self.shape))
+        np.random.shuffle(all_points)
+        self.sample_size = self.sample_size or int(grid_size * self.random_sampling) or 1
+        return all_points[:self.sample_size]
 
     def calc_scores(self) -> None:
         """
         go over entire grid of parameters and calculate score
         record score to scores_matrix with associated params_matrix
         """
-        total_grid_points = reduce(lambda i, acc: acc * i, self.scores_matrix.shape, 1)
-        indexes = list(self.iter_indexes(self.shape))
-        sampled_grid_points = 0
-        if self.random_sampling < 1:
-            np.random.shuffle(indexes)
-            sampled_grid_points = int(total_grid_points * self.random_sampling)
-            assert sampled_grid_points > 0, 'Given random_sampling resulted in 0 points to be checked'
-            indexes = indexes[:sampled_grid_points]
-        prog = ProgIter(desc='Grid Search', total=(sampled_grid_points or total_grid_points),
-                        verbose=1)
-
+        sample_grid_points = self.get_sample_points()
+        prog = ProgIter(desc='Grid Search', total=len(sample_grid_points), verbose=1)
         prog.begin()
         with ProcessPoolExecutor() as executor:
-            for ix, score in zip(indexes, executor.map(self.score_for_ix, indexes)):
+            for ix, score in zip(sample_grid_points, executor.map(self.score_for_ix, sample_grid_points)):
                 self.scores_matrix[ix] = score
                 prog.step(inc=1)
         prog.end()

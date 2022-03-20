@@ -73,12 +73,15 @@ def grid_for_products(grid: List, products: pd.DataFrame) -> dict[str, list]:
     return dict(zip(products.name.to_list(), [grid] * products.shape[1]))
 
 
-@pytest.mark.parametrize('grid, extra, random_sampling, utility_func, interest_rate, trip_cost', [
-    ([1, 20, 30], {'how_many_should_hit_min': [1]}, 0.1, calc_utility, 0.03, 500),
+@pytest.mark.parametrize('grid, extra, Updater, random_sampling, utility_func, interest_rate, trip_cost', [
+    ([1, 20, 30], {'how_many_should_hit_min': [1]}, StrategyUpdater, 0.1, calc_utility, 0.03, 500),
+    (['papa_beer mama_beer', 'papa_beer water'], {}, ColumnsUpdater, 1, calc_utility, 0.03, 500),
 ])
-def test_grid_search_run(grid, extra, random_sampling, utility_func, interest_rate, trip_cost,
+def test_grid_search_run(grid, extra, Updater, random_sampling, utility_func, interest_rate, trip_cost,
                          local_time, high_traffic_loc, products, vm, test_strategy):
     search_grid = {**grid_for_products(grid, products), **extra}
+    if Updater is ColumnsUpdater:
+        search_grid = {'columns': grid}
     sim = Simulation(
         'test_run',
         products=products,
@@ -88,8 +91,10 @@ def test_grid_search_run(grid, extra, random_sampling, utility_func, interest_ra
         cycles=100
     )
 
+    updater = Updater(sim)
+
     gs = GridSearch(
-        sim=sim,
+        updater=updater,
         param_grid=search_grid,
         scoring_function=partial(utility_func, interest_rate=interest_rate, trip_cost=trip_cost),
         random_sampling=random_sampling

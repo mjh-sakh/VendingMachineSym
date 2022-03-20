@@ -1,6 +1,6 @@
 from functools import reduce
 from itertools import product
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Union
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -16,14 +16,66 @@ class UtilityFunctions:
         expenses = sum(sim.refills_per_day) * trip_cost + np.mean(sim.total_inventory_cost) / 365 * len(
             sim.total_inventory_cost) * interest_rate
         profits = sum(sim.profit)[0]
-        revenue = profits - expenses
+        revenue = (profits - expenses) / sim.cycles
         return revenue
+
+
+class SimUpdater:
+    def __init__(self, sim: Simulation):
+        self.sim = sim
+
+    def update(self, params: dict) -> None:
+        raise NotImplementedError
+
+    def reset(self):
+        self.sim.reset()
+
+    def run(self):
+        self.sim.run()
+
+    @property
+    def object_for_scoring(self):
+        return self.sim
+
+
+class StrategyUpdater(SimUpdater):
+    """
+    update strategy with 'min_levels' and 'how_many_should_hit_min' params
+    """
+    def update(self, params: dict) -> None:
+        """
+        update simulation parameters in order to run it again
+        it's tailored for one particular one with min_levels and how_many_should_hit_min params
+        """
+        updated_strategy: FillUpAllExistingToMaxOnMinLevel = self.sim.STGs[self.sim.VMs[0]]
+        for name in updated_strategy.min_levels.keys():
+            updated_strategy.min_levels[name] = params.get(name) or updated_strategy.min_levels[name]
+        if (value := params['how_many_should_hit_min']):
+            updated_strategy.how_many_should_hit_min = value
+        self.sim.STGs[self.sim.VMs[0]] = updated_strategy
+
+
+class ColumnsUpdater(SimUpdater):
+    """
+    update simulation VM columns with new products
+    params = {'columns': ['product_name product_name, another_product']}
+    """
+    capacity = {
+        250: 40,
+        330: 40,
+        500: 30,
+    }
+
+    def update(self, params: dict) -> None:
+        new_products = params['columns'].split(' ')
+        new_columns = [(name, self.capacity[self.sim.product_sizes[name]]) for name in new_products]
+        self.sim.VMs[0].columns = new_columns
 
 
 class GridSearch:
 
     def __init__(self, *,
-                 sim: Simulation,
+                 updater: SimUpdater,
                  param_grid: dict[str, Any],
                  scoring_function: Callable[[Simulation], float],
                  random_sampling: Union[float, int] = 1.0) -> None:
@@ -32,7 +84,7 @@ class GridSearch:
         optional random sampling is fraction of points to be scored, default is 1 (100%)
         integer value can be provided instead of fraction to specify max number of sample points
         """
-        self.sim = sim
+        self.sim = updater
         self.param_grid = param_grid
         if random_sampling > 1:
             self.sample_size = int(random_sampling)
@@ -86,10 +138,11 @@ class GridSearch:
         """
         update simulation parameters and run scoring function on it
         """
-        self.sim.local_time.reset()
-        self.update_sim(params)
+        self.sim.reset()
+        params_dict = dict(zip(self.param_names, params))
+        self.sim.update(params_dict)
         self.sim.run()
-        score = self.scoring_function(self.sim)
+        score = self.scoring_function(self.sim.object_for_scoring)
         return score
 
     def get_sample_points(self):

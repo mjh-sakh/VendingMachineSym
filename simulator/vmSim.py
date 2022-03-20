@@ -111,6 +111,9 @@ class VendingMachine:
     def __repr__(self):
         return self.name
 
+    def reset(self):
+        self.history = defaultdict(_lambda_empty_list)
+
     @property
     def available_products(self) -> List[ProductName]:
         return [name for name, amount in self.inventory.items() if amount > 0]
@@ -280,6 +283,7 @@ class Simulation:
         self.local_time = local_time
         self.products: ProductsCI = self.from_df_to_dict(products, ['name', 'CI'])
         self.product_costs = self.from_df_to_dict(products, ['name', 'cost'])
+        self.product_sizes = self.from_df_to_dict(products, ['name', 'size'])
         self.product_margins = self.from_df_to_dict(
             products, ['name', 'margin'])
         self.VMs = VMs
@@ -293,6 +297,10 @@ class Simulation:
         self.sold_outs_per_day: List[int] = []
         self.total_inventory_cost = np.array([])
         self.profit = np.array([])
+
+    def reset(self):
+        self.local_time.reset()
+        [VM.reset() for VM in self.VMs]
 
     @staticmethod
     def from_df_to_dict(df: pd.DataFrame, columns: List[str]):
